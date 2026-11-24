@@ -38,8 +38,8 @@ class EncodingDetectorTest {
 
     @Test
     fun utf16WithoutBomIsRecognisedByItsZeroBytes() {
-        assertEquals(TextEncoding.UTF_16LE, EncodingDetector.detect("texto simples".toByteArray(Charsets.UTF_16LE)))
-        assertEquals(TextEncoding.UTF_16BE, EncodingDetector.detect("texto simples".toByteArray(Charsets.UTF_16BE)))
+        assertEquals(TextEncoding.UTF_16LE_NO_BOM, EncodingDetector.detect("texto simples".toByteArray(Charsets.UTF_16LE)))
+        assertEquals(TextEncoding.UTF_16BE_NO_BOM, EncodingDetector.detect("texto simples".toByteArray(Charsets.UTF_16BE)))
     }
 
     @Test

@@ -4,17 +4,20 @@ import java.nio.ByteBuffer
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 
-/** The encodings the editor reads and writes. [bom] is written before the text when saving. */
+/** The encodings the editor reads and writes. [bom] is written before the text when saving; files read without one are saved without one. */
 enum class TextEncoding(val charsetName: String, val label: String, bomBytes: IntArray = IntArray(0)) {
     UTF_8("UTF-8", "UTF-8"),
     UTF_8_BOM("UTF-8", "UTF-8 BOM", intArrayOf(0xEF, 0xBB, 0xBF)),
-    UTF_16LE("UTF-16LE", "UTF-16 LE", intArrayOf(0xFF, 0xFE)),
-    UTF_16BE("UTF-16BE", "UTF-16 BE", intArrayOf(0xFE, 0xFF)),
+    UTF_16LE("UTF-16LE", "UTF-16 LE BOM", intArrayOf(0xFF, 0xFE)),
+    UTF_16BE("UTF-16BE", "UTF-16 BE BOM", intArrayOf(0xFE, 0xFF)),
+    UTF_16LE_NO_BOM("UTF-16LE", "UTF-16 LE"),
+    UTF_16BE_NO_BOM("UTF-16BE", "UTF-16 BE"),
     WINDOWS_1252("windows-1252", "Windows-1252"),
     ISO_8859_1("ISO-8859-1", "ISO-8859-1");
 
     val bom: ByteArray = ByteArray(bomBytes.size) { bomBytes[it].toByte() }
     val charset: Charset get() = Charset.forName(charsetName)
+    val isUtf16: Boolean get() = charsetName.startsWith("UTF-16")
 
     fun hasBomAt(bytes: ByteArray): Boolean =
         bom.isNotEmpty() && bytes.size >= bom.size && bom.indices.all { bytes[it] == bom[it] }
@@ -34,9 +37,7 @@ object EncodingDetector {
 
     /** Zero bytes in text that is neither UTF-16 nor marked by a BOM mean the file is not text. */
     fun isBinary(bytes: ByteArray): Boolean {
-        val encoding = detect(bytes, truncated = true)
-        val isUtf16 = encoding == TextEncoding.UTF_16LE || encoding == TextEncoding.UTF_16BE
-        return !isUtf16 && bytes.any { it.toInt() == 0 }
+        return !detect(bytes, truncated = true).isUtf16 && bytes.any { it.toInt() == 0 }
     }
 
     private fun withoutBomUtf16(bytes: ByteArray): TextEncoding? {
@@ -46,8 +47,8 @@ object EncodingDetector {
         val zerosAtEven = (0 until pairs).count { bytes[it * 2].toInt() == 0 }
         val threshold = pairs * UTF16_ZERO_SHARE
         return when {
-            zerosAtOdd > threshold && zerosAtEven == 0 -> TextEncoding.UTF_16LE
-            zerosAtEven > threshold && zerosAtOdd == 0 -> TextEncoding.UTF_16BE
+            zerosAtOdd > threshold && zerosAtEven == 0 -> TextEncoding.UTF_16LE_NO_BOM
+            zerosAtEven > threshold && zerosAtOdd == 0 -> TextEncoding.UTF_16BE_NO_BOM
             else -> null
         }
     }

@@ -49,6 +49,14 @@ class TextCodecTest {
     }
 
     @Test
+    fun utf16WithoutBomIsSavedWithoutBom() {
+        val original = "a\r\nb".toByteArray(Charsets.UTF_16LE)
+        val decoded = TextCodec.decode(original)
+        assertEquals("a\nb", decoded.text)
+        assertArrayEquals(original, TextCodec.encode(decoded.text, decoded.encoding, decoded.lineEnding))
+    }
+
+    @Test
     fun canEncodeTellsWhenCharactersWouldBeLost() {
         assertTrue(TextCodec.canEncode("ação", TextEncoding.WINDOWS_1252))
         assertFalse(TextCodec.canEncode("ação 😀", TextEncoding.WINDOWS_1252))
