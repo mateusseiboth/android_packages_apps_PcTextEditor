@@ -44,17 +44,36 @@ import org.lineageos.pctexteditor.EditorSettings
 import org.lineageos.pctexteditor.FindUi
 import org.lineageos.pctexteditor.R
 import org.lineageos.pctexteditor.TabDocument
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.snapshotFlow
+import org.lineageos.pctexteditor.core.SyntaxHighlighter
+import org.lineageos.pctexteditor.core.SyntaxLanguage
 import org.lineageos.pctexteditor.core.TextLines
 
 private val TEXT_PADDING_H = 12.dp
 private val TEXT_PADDING_V = 8.dp
 private val GUTTER_PADDING = 12.dp
 private const val LINE_HEIGHT = 1.5f
+private const val HIGHLIGHT_DELAY_MILLIS = 150L
 
 /** The text with an optional line number gutter. Without word wrap the text scrolls sideways. */
 @Composable
-fun EditorPane(doc: TabDocument, settings: EditorSettings, find: FindUi, modifier: Modifier = Modifier) {
+fun EditorPane(
+    doc: TabDocument,
+    settings: EditorSettings,
+    find: FindUi,
+    language: SyntaxLanguage?,
+    modifier: Modifier = Modifier,
+) {
     val colors = MaterialTheme.colorScheme
+    val highlighted = language.takeIf { settings.syntaxHighlighting }
+    HighlightTokens(doc, highlighted)
+    val styles = syntaxStyles()
+    val coloring = remember(doc, styles, highlighted) { highlighted?.let { SyntaxColoring(doc, styles) } }
     val vertical = rememberScrollState()
     val horizontal = rememberScrollState()
     var layout by remember(doc) { mutableStateOf<TextLayoutResult?>(null) }
@@ -84,10 +103,26 @@ fun EditorPane(doc: TabDocument, settings: EditorSettings, find: FindUi, modifie
                     textStyle = style,
                     cursorBrush = SolidColor(colors.primary),
                     onTextLayout = { result -> layout = result() },
+                    outputTransformation = coloring,
                     decorator = placeholderDecorator(doc, placeholder, style.copy(color = colors.onSurfaceVariant)),
                 )
             }
         }
+    }
+}
+
+/** Tokenizes the tab's text off the main thread after each pause in typing. */
+@OptIn(FlowPreview::class)
+@Composable
+private fun HighlightTokens(doc: TabDocument, language: SyntaxLanguage?) {
+    LaunchedEffect(doc, language) {
+        doc.tokens = emptyList()
+        language ?: return@LaunchedEffect
+        snapshotFlow { doc.state.text }
+            .debounce(HIGHLIGHT_DELAY_MILLIS)
+            .collectLatest { text ->
+                doc.tokens = withContext(Dispatchers.Default) { SyntaxHighlighter.tokenize(text.toString(), language) }
+            }
     }
 }
 

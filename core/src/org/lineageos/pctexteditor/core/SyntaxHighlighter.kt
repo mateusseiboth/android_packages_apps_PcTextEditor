@@ -21,12 +21,17 @@ class SyntaxLanguage(val name: String, val rules: List<SyntaxRule>) {
 }
 
 object SyntaxHighlighter {
+    /** Longer texts are left plain: tokenizing them on every pause in typing would make the editor lag. */
+    const val MAX_CHARS = 1_000_000
+
     /** The highlighted spans of [text], in order and never overlapping; text between them is plain. */
-    fun tokenize(text: CharSequence, language: SyntaxLanguage): List<Token> =
-        language.regex.findAll(text)
+    fun tokenize(text: CharSequence, language: SyntaxLanguage): List<Token> {
+        if (text.length > MAX_CHARS) return emptyList()
+        return language.regex.findAll(text)
             .filter { it.range.last >= it.range.first }
             .map { match -> Token(match.range.first, match.range.last + 1, typeOf(match, language)) }
             .toList()
+    }
 
     private fun typeOf(match: MatchResult, language: SyntaxLanguage): TokenType {
         val group = (1..language.rules.size).first { match.groups[it] != null }

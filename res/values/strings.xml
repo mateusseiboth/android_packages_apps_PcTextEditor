@@ -63,4 +63,13 @@
     <string name="font_size">Font size: %1$d sp</string>
     <string name="show_sidebar">Show the sidebar on start</string>
     <string name="done">Done</string>
+    <string name="action_syntax">Syntax highlighting</string>
+    <string name="action_auto_save">Auto save</string>
+    <string name="file_changed_title">This file changed</string>
+    <string name="file_changed_message">Another app changed %1$s. Which version do you want to keep?</string>
+    <string name="file_changed_load">Load the new version</string>
+    <string name="file_changed_keep">Keep mine</string>
+    <string name="file_changed_copy">Save mine as a copy</string>
+    <string name="file_reloaded">%1$s changed in another app and was reloaded.</string>
+    <string name="file_gone">%1$s is no longer available. Use Save as to keep your text.</string>
 </resources>

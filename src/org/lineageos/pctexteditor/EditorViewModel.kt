@@ -12,10 +12,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.snapshotFlow
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.lineageos.pctexteditor.core.AutoSave
+import org.lineageos.pctexteditor.core.ChangeCheck
+import org.lineageos.pctexteditor.core.DraftSession
+import org.lineageos.pctexteditor.core.DraftTab
+import org.lineageos.pctexteditor.core.ExternalChange
+import org.lineageos.pctexteditor.core.FileStamp
 import org.lineageos.pctexteditor.core.DecodedText
 import org.lineageos.pctexteditor.core.EditorCommand
 import org.lineageos.pctexteditor.core.EditorTabs
@@ -51,12 +64,16 @@ sealed interface EditorDialog {
     data class SaveChanges(val tabId: Long, val name: String) : EditorDialog
     data class EncodingLoss(val tabId: Long, val encoding: TextEncoding) : EditorDialog
     data object Settings : EditorDialog
+    data class FileChanged(val tabId: Long, val name: String) : EditorDialog
 }
 
 enum class CloseAnswer { SAVE, DISCARD, CANCEL }
 
+/** What to keep when another app changed a file the tab has unsaved changes for. */
+enum class ChangeAnswer { LOAD_THEIRS, KEEP_MINE, COPY_MINE }
+
 private sealed interface OpenOutcome {
-    data class Loaded(val meta: DocumentMeta, val decoded: DecodedText) : OpenOutcome
+    data class Loaded(val meta: DocumentMeta, val decoded: DecodedText, val stamp: FileStamp?) : OpenOutcome
     data class Refused(val meta: DocumentMeta, val decision: OpenDecision) : OpenOutcome
 }
 
@@ -66,7 +83,10 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     private val settingsStore = SettingsStore(app.getSharedPreferences("editor", Context.MODE_PRIVATE))
     private val documents = mutableStateMapOf<Long, TabDocument>()
     private val closeAfterSave = mutableSetOf<Long>()
+    private val saving = mutableSetOf<Long>()
+    private val drafts = DraftStore(File(app.filesDir, "drafts"))
     private var nextId = 1L
+    private var lastEditAt = 0L
 
     var tabs by mutableStateOf(EditorTabs.EMPTY)
         private set
@@ -104,8 +124,18 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         EditorCommand.PREVIOUS_TAB to { tabs = tabs.selectPrevious() },
     )
 
+    private val changeActions: Map<ExternalChange, (TabInfo) -> Unit> = mapOf(
+        ExternalChange.NONE to {},
+        ExternalChange.RELOAD to { tab -> reload(tab, announce = true) },
+        ExternalChange.ASK to { tab -> dialog = EditorDialog.FileChanged(tab.id, tab.name) },
+        ExternalChange.GONE to { tab -> message(R.string.file_gone, tab.name) },
+    )
+
     init {
-        newTab()
+        viewModelScope.launch {
+            restoreDrafts()
+            keepDraftsAndAutoSave()
+        }
     }
 
     fun run(command: EditorCommand) = commands.getValue(command)()
@@ -228,6 +258,36 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // Changes made by other apps
+
+    /** Compares each open file with the stamp last seen; called when the window comes back and every few seconds. */
+    fun checkExternalChanges() {
+        val watched = tabs.tabs.filter { it.uri != null && it.id !in saving && documents[it.id]?.stamp != null }
+        if (watched.isEmpty()) return
+        viewModelScope.launch {
+            val stamps = withContext(Dispatchers.IO) { watched.associate { it.id to store.stampOf(Uri.parse(it.uri)) } }
+            watched.forEach { onStamp(it.id, stamps[it.id]) }
+        }
+    }
+
+    fun answerFileChanged(answer: ChangeAnswer) {
+        val pending = dialog as? EditorDialog.FileChanged ?: return
+        dialog = null
+        val tab = tabs.tabs.firstOrNull { it.id == pending.tabId } ?: return
+        val actions = mapOf(
+            ChangeAnswer.LOAD_THEIRS to { reload(tab, announce = false) },
+            ChangeAnswer.KEEP_MINE to { save(tab.id) },
+            ChangeAnswer.COPY_MINE to { requestSaveAs(tab.id) },
+        )
+        actions.getValue(answer)()
+    }
+
+    /** Writes the drafts right away (the window is going to the background). */
+    fun saveDraftsNow() {
+        val (session, texts) = buildDrafts()
+        DRAFT_WRITER.launch { runCatching { drafts.save(session, texts) } }
+    }
+
     // Find and replace
 
     fun openFind(replace: Boolean) {
@@ -326,8 +386,8 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         selectedDocument()?.state?.edit { selection = TextRange(match.first, match.last + 1) }
     }
 
-    private fun addTab(info: TabInfo, text: String, saved: SavedForm) {
-        documents[info.id] = TabDocument(text, saved)
+    private fun addTab(info: TabInfo, text: String, saved: SavedForm, stamp: FileStamp? = null) {
+        documents[info.id] = TabDocument(text, saved, stamp)
         tabs = tabs.open(info)
         refreshFind()
     }
@@ -354,7 +414,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val effective = OpenDecision.OPEN.takeIf { confirmed && decision == OpenDecision.CONFIRM_LARGE } ?: decision
         if (effective != OpenDecision.OPEN) return OpenOutcome.Refused(meta, effective)
         store.keepAccess(uri)
-        return OpenOutcome.Loaded(meta, TextCodec.decode(store.readAll(uri)))
+        return OpenOutcome.Loaded(meta, TextCodec.decode(store.readAll(uri)), store.stampOf(uri))
     }
 
     private fun applyOpen(uri: Uri, outcome: OpenOutcome) {
@@ -363,7 +423,7 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         val decoded = loaded.decoded
         dropBlankStartTab()
         val info = TabInfo(nextId++, loaded.meta.name, uri.toString(), decoded.encoding, decoded.lineEnding)
-        addTab(info, decoded.text, SavedForm(decoded.text, decoded.encoding, decoded.lineEnding))
+        addTab(info, decoded.text, SavedForm(decoded.text, decoded.encoding, decoded.lineEnding), loaded.stamp)
         rememberRecent(uri, loaded.meta.name)
     }
 
@@ -381,11 +441,14 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
         refreshFind()
     }
 
-    private fun write(tab: TabInfo, uri: Uri, text: String) {
+    /** While a tab is being written, change checks skip it: the new date is ours, not another app's. */
+    private fun write(tab: TabInfo, uri: Uri, text: String, quiet: Boolean = false) {
         val bytes = TextCodec.encode(text, tab.encoding, tab.lineEnding)
+        saving += tab.id
         viewModelScope.launch {
-            val written = withContext(Dispatchers.IO) { runCatching { store.write(uri, bytes) } }
-            written.onSuccess { onSaved(tab, text) }.onFailure {
+            val written = withContext(Dispatchers.IO) { runCatching { store.write(uri, bytes).let { store.stampOf(uri) } } }
+            saving -= tab.id
+            written.onSuccess { stamp -> onSaved(tab, text, stamp, quiet) }.onFailure {
                 closeAfterSave -= tab.id
                 message(R.string.error_save, tab.name)
             }
@@ -393,10 +456,124 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The saved form is the text that was written, not what was typed meanwhile. */
-    private fun onSaved(written: TabInfo, text: String) {
-        documents[written.id]?.saved = SavedForm(text, written.encoding, written.lineEnding)
-        message(R.string.saved, written.name)
+    private fun onSaved(written: TabInfo, text: String, stamp: FileStamp?, quiet: Boolean) {
+        documents[written.id]?.let { doc ->
+            doc.saved = SavedForm(text, written.encoding, written.lineEnding)
+            doc.stamp = stamp
+        }
+        if (!quiet) message(R.string.saved, written.name)
         if (closeAfterSave.remove(written.id)) removeTab(written.id)
+    }
+
+    /** The answer is reported once: the stamp seen becomes the known one. A pending dialog waits its turn. */
+    private fun onStamp(id: Long, current: FileStamp?) {
+        if (dialog != null) return
+        val tab = tabs.tabs.firstOrNull { it.id == id } ?: return
+        val doc = documents[id] ?: return
+        val change = ChangeCheck.decide(doc.stamp, current, doc.isDirty(tab))
+        doc.stamp = current
+        changeActions.getValue(change)(tab)
+    }
+
+    /** Loads the file's new content as an edit, so undo brings the previous text back. */
+    private fun reload(tab: TabInfo, announce: Boolean) {
+        val uri = tab.uri?.let(Uri::parse) ?: return
+        viewModelScope.launch {
+            val read = withContext(Dispatchers.IO) {
+                runCatching { TextCodec.decode(store.readAll(uri)) to store.stampOf(uri) }
+            }
+            read.onSuccess { (decoded, stamp) -> applyReload(tab, decoded, stamp, announce) }
+                .onFailure { message(R.string.error_open, tab.name) }
+        }
+    }
+
+    private fun applyReload(tab: TabInfo, decoded: DecodedText, stamp: FileStamp?, announce: Boolean) {
+        val doc = documents[tab.id] ?: return
+        val cursor = doc.state.selection.min.coerceAtMost(decoded.text.length)
+        doc.state.edit {
+            replace(0, length, decoded.text)
+            selection = TextRange(cursor)
+        }
+        tabs = tabs.update(tab.id) { it.copy(encoding = decoded.encoding, lineEnding = decoded.lineEnding) }
+        doc.saved = SavedForm(decoded.text, decoded.encoding, decoded.lineEnding)
+        doc.stamp = stamp
+        refreshFind()
+        if (announce) message(R.string.file_reloaded, tab.name)
+    }
+
+    // Drafts and auto-save
+
+    /** Brings back the tabs of the last session; clean file tabs are read again from their files. */
+    private suspend fun restoreDrafts() {
+        val (session, restored) = withContext(Dispatchers.IO) {
+            val session = runCatching { drafts.load() }.getOrDefault(DraftSession(emptyList(), null))
+            session to session.tabs.map { it to drafts.textsOf(it.id) }
+        }
+        val newIds = restored.mapNotNull { (draft, texts) -> restoreTab(draft, texts)?.let { draft.id to it } }.toMap()
+        if (tabs.tabs.isEmpty()) newTab()
+        session.selectedId?.let(newIds::get)?.let { tabs = tabs.select(it) }
+    }
+
+    private fun restoreTab(draft: DraftTab, texts: DraftTexts): Long? {
+        val uri = draft.uri
+        if (uri != null && tabs.tabs.any { it.uri == uri }) return null
+        val current = texts.current ?: return reopenClean(uri)
+        val info = TabInfo(nextId++, draft.name, uri, draft.encoding, draft.lineEnding)
+        val savedText = texts.saved ?: current.takeIf { uri != null } ?: ""
+        addTab(info, current, SavedForm(savedText, draft.savedEncoding, draft.savedLineEnding), draft.stamp)
+        return info.id
+    }
+
+    /** A clean file tab is read again from its file; a blank untitled tab is not brought back. */
+    private fun reopenClean(uri: String?): Long? {
+        uri?.let { openUri(Uri.parse(it)) }
+        return null
+    }
+
+    /**
+     * Every change (typing, tabs) is kept as a draft after a short pause, and tabs with a file are written
+     * back once typing has paused long enough, when auto-save is on.
+     */
+    @OptIn(FlowPreview::class)
+    private fun keepDraftsAndAutoSave() {
+        val changes = snapshotFlow { tabs to documents.values.map { System.identityHashCode(it.state.text) } }
+            .drop(1)
+            .onEach { lastEditAt = System.currentTimeMillis() }
+        viewModelScope.launch { changes.debounce(DRAFT_DELAY_MILLIS).collect { saveDrafts() } }
+        viewModelScope.launch { changes.debounce(AutoSave.IDLE_MILLIS).collect { autoSave() } }
+    }
+
+    private suspend fun saveDrafts() {
+        val (session, texts) = buildDrafts()
+        withContext(Dispatchers.IO) { runCatching { drafts.save(session, texts) } }
+    }
+
+    /** Text is kept for untitled tabs and tabs with changes; clean file tabs only need their file. */
+    private fun buildDrafts(): Pair<DraftSession, Map<Long, DraftTexts>> {
+        val kept = tabs.tabs.mapNotNull { tab -> documents[tab.id]?.let { tab to it } }
+        val session = DraftSession(kept.map { (tab, doc) -> draftOf(tab, doc) }, tabs.selectedId)
+        val texts = kept.associate { (tab, doc) ->
+            val keepText = tab.uri == null || doc.isDirty(tab)
+            val current = doc.state.text.toString().takeIf { keepText }
+            tab.id to DraftTexts(current, doc.saved.text.takeIf { keepText && tab.uri != null })
+        }
+        return session to texts
+    }
+
+    private fun draftOf(tab: TabInfo, doc: TabDocument) = DraftTab(
+        tab.id, tab.name, tab.uri, tab.encoding, tab.lineEnding, doc.saved.encoding, doc.saved.lineEnding, doc.stamp,
+    )
+
+    /** Auto-save never asks: text the encoding can't hold waits for a manual save. */
+    private fun autoSave() {
+        val now = System.currentTimeMillis()
+        tabs.tabs.forEach { tab ->
+            val doc = documents[tab.id] ?: return@forEach
+            val text = doc.state.text.toString()
+            val due = AutoSave.isDue(settings.autoSave, tab.uri != null, doc.isDirty(tab), lastEditAt, now)
+            if (!due || tab.id in saving || !TextCodec.canEncode(text, tab.encoding)) return@forEach
+            write(tab, Uri.parse(tab.uri), text, quiet = true)
+        }
     }
 
     private fun rememberRecent(uri: Uri, name: String) {
@@ -413,4 +590,11 @@ class EditorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun string(@StringRes id: Int): String = getApplication<Application>().getString(id)
+
+    private companion object {
+        const val DRAFT_DELAY_MILLIS = 1_000L
+
+        /** Outlives the view model: drafts written as the window goes away must still land. */
+        val DRAFT_WRITER = CoroutineScope(Dispatchers.IO)
+    }
 }

@@ -12,6 +12,8 @@ data class EditorSettings(
     val lineNumbers: Boolean = true,
     val wordWrap: Boolean = true,
     val sidebarOnStart: Boolean = true,
+    val syntaxHighlighting: Boolean = true,
+    val autoSave: Boolean = false,
 ) {
     companion object {
         val FONT_SIZES = 10..28
@@ -29,6 +31,8 @@ class SettingsStore(private val prefs: SharedPreferences) {
             lineNumbers = prefs.getBoolean(LINE_NUMBERS, defaults.lineNumbers),
             wordWrap = prefs.getBoolean(WORD_WRAP, defaults.wordWrap),
             sidebarOnStart = prefs.getBoolean(SIDEBAR, defaults.sidebarOnStart),
+            syntaxHighlighting = prefs.getBoolean(SYNTAX, defaults.syntaxHighlighting),
+            autoSave = prefs.getBoolean(AUTO_SAVE, defaults.autoSave),
         )
     }
 
@@ -39,6 +43,8 @@ class SettingsStore(private val prefs: SharedPreferences) {
             .putBoolean(LINE_NUMBERS, settings.lineNumbers)
             .putBoolean(WORD_WRAP, settings.wordWrap)
             .putBoolean(SIDEBAR, settings.sidebarOnStart)
+            .putBoolean(SYNTAX, settings.syntaxHighlighting)
+            .putBoolean(AUTO_SAVE, settings.autoSave)
             .apply()
     }
 
@@ -54,6 +60,8 @@ class SettingsStore(private val prefs: SharedPreferences) {
         const val LINE_NUMBERS = "line_numbers"
         const val WORD_WRAP = "word_wrap"
         const val SIDEBAR = "sidebar_on_start"
+        const val SYNTAX = "syntax_highlighting"
+        const val AUTO_SAVE = "auto_save"
         const val RECENT = "recent_files"
     }
 }

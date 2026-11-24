@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import org.lineageos.pctexteditor.ChangeAnswer
 import org.lineageos.pctexteditor.CloseAnswer
 import org.lineageos.pctexteditor.EditorDialog
 import org.lineageos.pctexteditor.EditorSettings
@@ -33,6 +34,7 @@ fun EditorDialogs(vm: EditorViewModel) {
         is EditorDialog.SaveChanges -> SaveChangesDialog(dialog.name, vm::answerClose)
         is EditorDialog.EncodingLoss -> EncodingLossDialog(dialog.encoding.label, vm::answerEncodingLoss)
         EditorDialog.Settings -> SettingsDialog(vm.settings, vm::updateSettings, vm::dismissDialog)
+        is EditorDialog.FileChanged -> FileChangedDialog(dialog.name, vm::answerFileChanged, vm::dismissDialog)
         null -> Unit
     }
 }
@@ -61,6 +63,25 @@ private fun SaveChangesDialog(name: String, onAnswer: (CloseAnswer) -> Unit) {
             Row {
                 TextButton(onClick = { onAnswer(CloseAnswer.CANCEL) }) { Text(stringResource(R.string.cancel)) }
                 TextButton(onClick = { onAnswer(CloseAnswer.DISCARD) }) { Text(stringResource(R.string.dont_save)) }
+            }
+        },
+    )
+}
+
+/** Another app changed a file this tab has unsaved changes for. Dismissing leaves both as they are. */
+@Composable
+private fun FileChangedDialog(name: String, onAnswer: (ChangeAnswer) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.file_changed_title)) },
+        text = { Text(stringResource(R.string.file_changed_message, name)) },
+        confirmButton = {
+            TextButton(onClick = { onAnswer(ChangeAnswer.LOAD_THEIRS) }) { Text(stringResource(R.string.file_changed_load)) }
+        },
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onAnswer(ChangeAnswer.COPY_MINE) }) { Text(stringResource(R.string.file_changed_copy)) }
+                TextButton(onClick = { onAnswer(ChangeAnswer.KEEP_MINE) }) { Text(stringResource(R.string.file_changed_keep)) }
             }
         },
     )
@@ -115,6 +136,10 @@ private fun SettingsDialog(
                 SectionTitle(R.string.editor_section)
                 SwitchRow(R.string.action_line_numbers, settings.lineNumbers) { on -> onChange { it.copy(lineNumbers = on) } }
                 SwitchRow(R.string.action_word_wrap, settings.wordWrap) { on -> onChange { it.copy(wordWrap = on) } }
+                SwitchRow(R.string.action_syntax, settings.syntaxHighlighting) { on ->
+                    onChange { it.copy(syntaxHighlighting = on) }
+                }
+                SwitchRow(R.string.action_auto_save, settings.autoSave) { on -> onChange { it.copy(autoSave = on) } }
                 SwitchRow(R.string.show_sidebar, settings.sidebarOnStart) { on ->
                     onChange { it.copy(sidebarOnStart = on) }
                 }

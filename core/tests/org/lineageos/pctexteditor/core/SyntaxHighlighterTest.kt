@@ -169,6 +169,12 @@ class SyntaxHighlighterTest {
     }
 
     @Test
+    fun textAboveTheLimitIsLeftPlain() {
+        val huge = "val x = 1\n".repeat(SyntaxHighlighter.MAX_CHARS / 10 + 1)
+        assertEquals(emptyList<Token>(), SyntaxHighlighter.tokenize(huge, SyntaxLanguages.KOTLIN))
+    }
+
+    @Test
     fun languageFromFileName() {
         val cases = mapOf(
             "Main.kt" to SyntaxLanguages.KOTLIN, "build.gradle.kts" to SyntaxLanguages.KOTLIN,

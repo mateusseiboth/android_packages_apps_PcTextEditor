@@ -26,10 +26,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 import org.lineageos.pctexteditor.EditorViewModel
 import org.lineageos.pctexteditor.R
 import org.lineageos.pctexteditor.SaveAsRequest
 import org.lineageos.pctexteditor.core.Shortcuts
+import org.lineageos.pctexteditor.core.SyntaxLanguages
+
+private const val CHANGE_CHECK_MILLIS = 5_000L
 
 /** "Save as" through the system file picker, with a name and MIME type per request. */
 private class CreateTextDocument : ActivityResultContract<SaveAsRequest, Uri?>() {
@@ -69,6 +76,7 @@ fun EditorScreen(vm: EditorViewModel) {
     LaunchedEffect(Unit) {
         for (request in vm.openRequests) openFiles.launch(arrayOf("*/*"))
     }
+    WatchExternalChanges(vm)
 
     Scaffold(
         modifier = Modifier.onPreviewKeyEvent { event ->
@@ -95,6 +103,20 @@ fun EditorScreen(vm: EditorViewModel) {
     EditorDialogs(vm)
 }
 
+/** While the window is in front, open files are compared with what other apps may have written. */
+@Composable
+private fun WatchExternalChanges(vm: EditorViewModel) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                vm.checkExternalChanges()
+                delay(CHANGE_CHECK_MILLIS)
+            }
+        }
+    }
+}
+
 @Composable
 private fun EditorColumn(vm: EditorViewModel, modifier: Modifier) {
     val tab = vm.tabs.selected
@@ -116,7 +138,7 @@ private fun EditorColumn(vm: EditorViewModel, modifier: Modifier) {
             if (tab == null || doc == null) return@Box
             key(tab.id) {
                 LaunchedEffect(doc, vm.find.visible) { snapshotFlow { doc.state.text }.collect { vm.refreshFind() } }
-                EditorPane(doc, vm.settings, vm.find)
+                EditorPane(doc, vm.settings, vm.find, SyntaxLanguages.forFileName(tab.name))
             }
             if (vm.find.visible) {
                 FindBar(vm.find, findActions(vm), Modifier.align(Alignment.TopEnd).padding(12.dp))
@@ -154,6 +176,12 @@ private fun EditorMenu(vm: EditorViewModel) {
             },
             MenuEntry(R.string.action_word_wrap, checked = vm.settings.wordWrap) {
                 vm.updateSettings { it.copy(wordWrap = !it.wordWrap) }
+            },
+            MenuEntry(R.string.action_syntax, checked = vm.settings.syntaxHighlighting) {
+                vm.updateSettings { it.copy(syntaxHighlighting = !it.syntaxHighlighting) }
+            },
+            MenuEntry(R.string.action_auto_save, checked = vm.settings.autoSave) {
+                vm.updateSettings { it.copy(autoSave = !it.autoSave) }
             },
             null,
             MenuEntry(R.string.action_settings) { vm.showSettings() },

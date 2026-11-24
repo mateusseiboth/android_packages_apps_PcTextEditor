@@ -29,6 +29,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Unsaved work is kept as drafts whenever the window leaves the screen. */
+    override fun onStop() {
+        super.onStop()
+        vm.saveDraftsNow()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handle(intent)

@@ -2,8 +2,11 @@ package org.lineageos.pctexteditor
 
 import android.content.ContentResolver
 import android.content.Intent
+import android.database.Cursor
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import org.lineageos.pctexteditor.core.FileStamp
 
 data class DocumentMeta(val name: String, val size: Long)
 
@@ -38,5 +41,29 @@ class DocumentStore(private val resolver: ContentResolver) {
             .recoverCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     }
 
+    /**
+     * The file's date and size as its provider reports them, or null when it can no longer be reached. A
+     * provider that reports neither gets a hash of the content, so changes are still noticed.
+     */
+    fun stampOf(uri: Uri): FileStamp? {
+        val cursor = runCatching { resolver.query(uri, null, null, null, null) }.getOrNull() ?: return null
+        val known = cursor.use { row ->
+            if (!row.moveToFirst()) return null
+            val modified = row.longAt(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                ?: row.longAt(MEDIA_DATE_MODIFIED)?.times(MILLIS_PER_SECOND)
+            FileStamp(modified, row.longAt(OpenableColumns.SIZE), hash = null)
+        }
+        val isBlind = known.modified == null && known.size == null
+        return known.takeUnless { isBlind } ?: runCatching { known.copy(hash = readAll(uri).contentHashCode()) }.getOrNull()
+    }
+
+    private fun Cursor.longAt(column: String): Long? =
+        getColumnIndex(column).takeIf { it >= 0 && !isNull(it) }?.let(::getLong)
+
     private fun open(uri: Uri) = resolver.openInputStream(uri) ?: error("no input stream for $uri")
+
+    private companion object {
+        const val MEDIA_DATE_MODIFIED = "date_modified"
+        const val MILLIS_PER_SECOND = 1000L
+    }
 }
