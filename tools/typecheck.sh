@@ -1,6 +1,6 @@
 #!/bin/bash
 # Compiles the app (core + Compose UI) on the host with the tree's Kotlin compiler and Compose plugin,
-# against the prebuilt androidx jars and the framework and coroutines jars of a previous build
+# against the prebuilt androidx jars, the public SDK jar and the coroutines jar of a previous build
 # (out/soong/.intermediates). A quick check before a full build; it builds no APK.
 #   tools/typecheck.sh [WORK_DIR]
 set -e
@@ -33,7 +33,8 @@ PY
 
 CP=$(ls "$WORK"/libs/*.jar | tr '\n' ':')
 CP=$CP$INTER/external/kotlinx.coroutines/kotlinx_coroutines/linux_glibc_common/combined/kotlinx_coroutines.jar
-CP=$CP:$INTER/frameworks/base/framework-minus-apex/android_common/combined/framework.jar
+# The app builds with sdk_version "current": compile against the public SDK, as Soong does.
+CP=$CP:$TOP/prebuilts/sdk/current/public/android.jar
 JAVA_OPTS="-Xmx1536m" nice -n 19 "$TOP/external/kotlinc/bin/kotlinc" -no-reflect -jvm-target 21 \
   -Xplugin="$TOP/external/kotlinc/lib/compose-compiler-plugin.jar" \
   -cp "$CP" -d "$WORK/out" "$HERE/core/src" "$HERE/src" "$WORK/gen"
