@@ -23,12 +23,28 @@ normal (non-privileged) Kotlin + Jetpack Compose + Material 3 app, package `org.
 - **Line numbers** in a gutter that follows word wrap (numbers sit on the first visual line of each text line;
   only visible numbers are drawn). **Word wrap** on or off (off: the text scrolls sideways).
 - **Encodings**: detection from BOM (UTF-8, UTF-16 LE/BE), UTF-16 without BOM (zero byte pattern), valid UTF-8,
-  else Windows-1252. The status bar offers "Reopen with encoding" and "Save with encoding" (UTF-8, UTF-8 BOM,
-  UTF-16 LE/BE, Windows-1252, ISO-8859-1). Text the chosen encoding can't hold offers saving in UTF-8.
+  else Windows-1252. UTF-16 read without a BOM is written back without one. The status bar offers "Reopen with
+  encoding" and "Save with encoding" (UTF-8, UTF-8 BOM, UTF-16 LE/BE with or without BOM, Windows-1252,
+  ISO-8859-1). Text the chosen encoding can't hold offers saving in UTF-8.
 - **Line breaks**: LF, CRLF or CR detected (most common wins, ties go to LF), edited as LF and written back as the
   file had them; changeable in the status bar.
 - **Open policy**: binary files are refused, files over 2 MiB ask first, files over 32 MiB are refused.
-- **Settings**: theme (system/light/dark), font size (10 to 28 sp), line numbers, word wrap, sidebar on start.
+- **Syntax highlighting** (on by default) for Kotlin, Java, C, C++, Python, shell, JSON, XML, HTML, CSS,
+  JavaScript, TypeScript, Markdown, YAML, INI and Makefile, chosen from the file name (extension, or names such
+  as `Makefile` and `.bashrc`). Each language is a rule table in `core/.../SyntaxLanguages.kt`; the tokenizer
+  runs off the main thread after each pause in typing and colours the text through an output transformation, so
+  editing and undo are untouched. Light and dark palettes; texts over one million characters stay plain.
+- **Drafts**: the open tabs, their unsaved text and the file's saved text are kept in the app's private files
+  (`files/drafts`) a second after each change and when the window leaves the screen. They come back on the next
+  start, also after the system ends the process; clean file tabs are read again from their files.
+- **Auto save** (setting, off by default): tabs with a file are written back two seconds after typing stops. It
+  never asks, so text the encoding can't hold waits for a manual save.
+- **Changes by other apps**: while the window is in front, open files are checked every five seconds (date and
+  size from the provider, or a content hash when it reports neither). A clean tab is reloaded as an edit (undo
+  brings the old text back); a tab with changes asks: load the new version, keep mine, or save mine as a copy.
+  A file that disappears is reported once.
+- **Settings**: theme (system/light/dark), font size (10 to 28 sp), line numbers, word wrap, sidebar on start,
+  syntax highlighting, auto save.
 - **Shortcuts**: Ctrl+N/T new tab, Ctrl+O open, Ctrl+S save, Ctrl+Shift+S save as, Ctrl+W close tab, Ctrl+F find,
   Ctrl+H replace, F3/Ctrl+G and Shift+F3/Ctrl+Shift+G next/previous match, Ctrl+Tab and Ctrl+Shift+Tab between
   tabs. Undo and redo (Ctrl+Z) come from the Compose text field, with one history per tab.
@@ -41,7 +57,7 @@ launcher icon is our own vector and the UI icons come from the Material icons li
 ## Tests
 
 ```sh
-core/run_tests.sh                       # 74 JUnit tests of the core, with external/kotlinc and JUnit from prebuilts
+core/run_tests.sh                       # 103 JUnit tests of the core, with external/kotlinc and JUnit from prebuilts
 python3 -m unittest discover -s tests   # UI strings: both languages, same placeholders, no em dash
 tools/typecheck.sh                      # compiles core + Compose UI against the androidx prebuilts and the public SDK
 ```
@@ -54,14 +70,14 @@ In Soong the core tests are `PcTextEditorCoreTests` (`java_test_host`, `atest`-a
 - `device.mk`: `PRODUCT_PACKAGES += PcTextEditor`
 - local manifest: `<project path="packages/apps/PcTextEditor" name="android_packages_apps_PcTextEditor" remote="pc" revision="lineage-24.0" />`
 
-## Not done yet
+## Limits
 
 - Never built with Soong or run on a device: only the host tests and the host typecheck have run.
-- Syntax highlighting (Googlebook has it), auto-save and drafts kept across restarts. Unsaved tabs are lost if
-  the process dies, and closing the window does not ask about unsaved tabs.
-- Detecting that another app changed the open file, and the large-file warning only checks size, not line length.
-- A second window: every file opens as a tab of the single window.
-- UTF-16 files are always written with a BOM, even when they were read without one.
+- Highlighting is per language with regular expressions: languages embedded in others (CSS or JavaScript inside
+  HTML) are not coloured as such.
+- Changes by other apps are found by checking every five seconds while the window is in front: document
+  providers don't send change notifications for arbitrary files, so there is nothing to listen to.
+- Every file opens as a tab of the single window (Googlebook also uses tabs).
 
 ## Credits
 
