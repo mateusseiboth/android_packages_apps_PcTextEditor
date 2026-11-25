@@ -79,6 +79,14 @@ In Soong the core tests are `PcTextEditorCoreTests` (`java_test_host`, `atest`-a
   providers don't send change notifications for arbitrary files, so there is nothing to listen to.
 - Every file opens as a tab of the single window (Googlebook also uses tabs).
 
+## Screenshots
+
+Taken in QEMU/KVM at 1920x1080 from the live ISO.
+
+![Text editor with a new file.](docs/screenshots/12-text-editor.png)
+
+Text editor with a new file.
+
 ## Credits
 
 This app is part of LineageOS for PCs and builds on:
